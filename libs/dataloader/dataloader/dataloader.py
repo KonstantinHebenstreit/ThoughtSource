@@ -83,16 +83,10 @@ class Collection:
     def __repr__(self):
         data = [
             (
-                name,
-                self._cache[name]["train"].num_rows
-                if "train" in self._cache[name]
-                else "-",
-                self._cache[name]["validation"].num_rows
-                if "validation" in self._cache[name]
-                else "-",
-                self._cache[name]["test"].num_rows
-                if "test" in self._cache[name]
-                else "-",
+                name, 
+                self._cache[name]['train'].num_rows if 'train' in self._cache[name] else '-',
+                self._cache[name]['validation'].num_rows if 'validation' in self._cache[name] else '-',
+                self._cache[name]['test'].num_rows if 'test' in self._cache[name] else '-'
             )
             for name in self._cache.keys()
         ]
