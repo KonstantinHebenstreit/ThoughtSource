@@ -1,6 +1,9 @@
 #specific
 /konstantin
 
+#vs code
+.vscode/
+
 # dumped files (collections saved to jsons via dump function)
 dump/
 
