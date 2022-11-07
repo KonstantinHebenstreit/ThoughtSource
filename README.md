@@ -13,6 +13,20 @@ ThoughtSource is a central, open resource and community around data and tools re
   <img alt="ThoughtSource overview 3" src="./resources/images/thoughtsource-overview-3.svg">
 </p>
 
+![ThoughtSource overview 3](/resources/images/thoughtsource-overview-3-small.png)
+
+<br/><br/>
+
+### __AI chain of thought creation:__
+
+![ThoughtSource overview 1](/resources/images/thoughtsource-overview-1-small.png)
+
+<br/><br/>
+
+### __Human annotation:__
+![ThoughtSource overview 2](/resources/images/thoughtsource-overview-2-small.png)
+
+
 ## Roadmap
 
 1. Create a repository of chain-of-thought (CoT) datasets converted to a unified format. ✅
