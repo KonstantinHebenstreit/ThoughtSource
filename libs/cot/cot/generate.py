@@ -5,7 +5,9 @@ import pkgutil
 import time
 
 import datasets as ds
-import openai
+
+# to not confuse langchain packages rename original openai package
+import openai as oai
 
 # disable transformation (e.g. map) caching
 # https://huggingface.co/docs/datasets/v2.6.1/en/package_reference/main_classes#datasets.disable_caching
@@ -13,8 +15,10 @@ ds.disable_caching()
 
 TEMPLATES = json.loads(pkgutil.get_data(__name__, "templates.json"))
 
+langchain = True
+
 # Load your API key from an environment variable or secret management service
-openai.api_key = os.getenv("OPENAI_API_KEY")
+oai.api_key = os.getenv("OPENAI_API_KEY")
 
 
 def print_now(return_flag=0):
@@ -41,15 +45,15 @@ def generate_and_extract(data, config):
     :param data: Dataset/DatasetDict - the dataset you want to generate CoTs for and extract answers
     :param config: a dictionary with the following keys:
         "idx_range": tuple(int,int) - Determines which indices the generate_and_extract routine is applied to,
-            Default: None (All items are used)
+            Default: "all" (All items are used)
         "debug": bool - Determines whether the openai api is called or a mock is returned, used for debugging,
             Default: True (openai api is not used)
-        "instruction_keys": list(str) - Determines which instructions are used from templates.json,
-            Default: None (All used)
+        "instruction_keys": list(str) - Determines which instruction_keys are used from templates.json,
+            Default: "all" (All used)
         "cot_trigger_keys": list(str) - Determines which cot triggers are used from templates.json,
-            Default: None (All are used)
+            Default: "all" (All are used)
         "answer_extraction_keys": list(str) - Determines which answer extraction prompts are used from templates.json,
-            Default: None (All are used)
+            Default: "all" (All are used)
         "author" : str - Name of the person responsible for generation, Default: ""
         "engine": str -  Name of the openai engine used, Default: "text-davinci-002"
         "temperature": float - Name of the person responsible for generation, Default: 0
@@ -60,19 +64,29 @@ def generate_and_extract(data, config):
 
     ds.disable_caching()
 
-    if "instruction_keys" not in config or not config["instruction_keys"]:
-        config["instruction_keys"] = [None] + list(TEMPLATES["instructions"].keys())
-    if "cot_trigger_keys" not in config or not config["cot_trigger_keys"]:
-        config["cot_trigger_keys"] = list(TEMPLATES["cot-triggers"].keys())
-    if "answer_extraction_keys" not in config or not config["answer_extraction_keys"]:
-        config["answer_extraction_keys"] = list(TEMPLATES["answer-extractions"].keys())
+    # Creating cofigurations for the options 'all' or 'None':
+    keys = ["instruction_keys","cot_trigger_keys","answer_extraction_keys"]
+    names_in_template = ["instructions","cot-triggers","answer-extractions"]
+    for key, name in zip (keys, names_in_template):
+        if key not in config or config[key] == 'all':
+            config[key] = list(TEMPLATES[name].keys())
+        # elif not config[key]:
+        #     config[key] = [None]
 
-    # Inserts None at index 0 of instruction_keys to query without an explicit instruction
-    # Now it is asserted that there is at least one generation without an instruction
-    # TODO maybe add option to disable this?
-    # TODO maybe rethink this
-    if None not in config["instruction_keys"]:
-        config["instruction_keys"].insert(0, None)
+    # if config["answer_extraction_keys"] == 'all':
+    #     config["answer_extraction_keys"] = [None] + list(TEMPLATES["answer-extractions"].keys())
+    # elif "answer_extraction_keys" not in config or not config["answer_extraction_keys"]:
+    #     config["answer_extraction_keys"] = [None]     
+
+
+        # Inserts None at index 0 of instruction_keys to query without an explicit instruction
+        # Now it is asserted that there is at least one generation without an instruction
+        # TODO maybe add option to disable this?
+        # TODO maybe rethink this
+
+        # for key in ["instruction_keys","cot_trigger_keys"]:
+        #     if None not in config[key]:
+        #         config[key].insert(0, None)
 
     if isinstance(data, ds.arrow_dataset.Dataset):
         if "idx_range" in config and config["idx_range"] is not None:
@@ -95,7 +109,7 @@ def generate_and_extract(data, config):
         n_samples * n_instruction_keys * n_cot_trigger_keys
         + n_samples * n_instruction_keys * n_cot_trigger_keys * n_answer_extraction_keys
     )
-    print(n_samples, n_instruction_keys, n_cot_trigger_keys, n_answer_extraction_keys)
+    print(f"n_samples: {n_samples}, n_instruction_keys: {n_instruction_keys}, n_cot_trigger_keys: {n_cot_trigger_keys}, n_answer_extraction_keys: {n_answer_extraction_keys}")
 
     if True or ("debug" in config and not config["debug"]):
         warning = "You are about to call the openai API which produces costs.\n"
@@ -124,21 +138,21 @@ def generate_and_extract(data, config):
 def _generate_and_extract(
     item,
     idx,
-    idx_range=None,
+    idx_range="all",
     author="",
     engine="text-davinci-002",
     temperature=0,
     max_tokens=128,
     api_time_interval=1.0,
-    instruction_keys=None,
-    cot_trigger_keys=None,
-    answer_extraction_keys=None,
+    instruction_keys="all",
+    cot_trigger_keys="all",
+    answer_extraction_keys="all",
     debug=True,
     verbose=False,
 ):
     """
     The function takes in a JSON object (item) and generates a CoT (Chain-of-Thought) for each combination of
-    of instructions and CoT triggers. For each generated CoT and for each of the given answer extractions it extracts an answer
+    of instruction_keys and CoT triggers. For each generated CoT and for each of the given answer extractions it extracts an answer
 
     :param item: the item (example) of a dataset to be processed
     :param idx: the index of the item in the dataset
@@ -149,18 +163,40 @@ def _generate_and_extract(
     output the most random answer, defaults to 0 (optional)
     :param max_tokens: The maximum number of tokens to generate, defaults to 128 (optional)
     :param api_time_interval: The time interval between API calls
-    :param instruction_keys: the instructions to generate the CoT
+    :param instruction_keys: the instruction_keys to generate the CoT
     :param cot_trigger_keys: the trigger to generate the CoT
     :param answer_extraction_keys: the trigger to extract answers given a generated CoT
     :param debug: If True, will print out the prompts and generated text, defaults to True (optional)
+
     :return: item populated with various fields
     """
-    if idx_range is None or (idx >= idx_range[0] and idx < idx_range[1]):
+    if idx_range == "all" or (idx >= idx_range[0] and idx < idx_range[1]):
         pass
     else:
+        # TODO: Why return item?
         return item
 
+
+    # Adding Letters (A,B,C,...) for the given multiple choice answers.
+    answer_choices_letters = "\n".join(
+        [f"{chr(65+i)}) {example}" for i, example in enumerate(item["choices"])]
+    )
+
+    prompt = (
+    item["question"]
+    + "\n"
+    + answer_choices_letters
+    + "\n")
+
     for instruction_key in instruction_keys:
+
+        if instruction_key is not None:
+            instruction_promt = (
+                TEMPLATES["instructions"][instruction_key] 
+                + "\n" 
+                + prompt)
+        else: instruction_promt = prompt
+
         for cot_trigger_key in cot_trigger_keys:
             generated_cot = {
                 "templates_version": TEMPLATES["version"],
@@ -178,89 +214,130 @@ def _generate_and_extract(
                 "comment": "",
                 "annotation": [],
             }
-            template_version, generate_cot_prompt = get_cot_generation_prompt(
-                item, instruction_key, cot_trigger_key
-            )
+
+            if cot_trigger_key is not None:
+                generate_cot_prompt = (
+                    instruction_promt 
+                    + TEMPLATES["cot-triggers"][cot_trigger_key]
+                    + "\n"
+                )
+            else: generate_cot_prompt = instruction_promt
+
             if verbose:
                 print("\n-------------------COT TRIGGER-------------------")
-            if verbose:
                 print(generate_cot_prompt)
-            cot = query_gpt3(
-                generate_cot_prompt,
-                engine,
-                temperature,
-                max_tokens,
-                api_time_interval,
-                debug,
-            )
-            if verbose:
-                print("\n------------------GENERATED COT-------------------")
-            if verbose:
-                print(cot)
-            generated_cot["cot"] = cot
-            generated_cot["date"] = print_now(1)
 
-            for answer_extraction_key in answer_extraction_keys:
-                answer = {"answer-extraction": answer_extraction_key, "answer": "", "correct_answer": None}
-                _, answer_extraction_prompt = get_answer_extraction_prompt(
-                    item, cot, answer_extraction_key
-                )
-                if verbose:
-                    print("\n------------------ANSWER EXTRACTION-------------------")
-                if verbose:
-                    print(answer_extraction_prompt)
-                assert (
-                    _ == template_version
-                ), "Version mismatch cot trigger <-> answer extraction"
-                predicted_answer = query_gpt3(
-                    answer_extraction_prompt,
+            if langchain:
+                cot = query_model( 
+                    generate_cot_prompt,
                     engine,
                     temperature,
                     max_tokens,
                     api_time_interval,
                     debug,
                 )
-                if verbose:
-                    print("\n------------------EXTRACTED ANSWER-------------------")
-                if verbose:
-                    print(predicted_answer)
-                answer["answer"] = predicted_answer
-                generated_cot["answers"].append(answer)
+            else:
+                cot = query_gpt3( 
+                    generate_cot_prompt,
+                    engine,
+                    temperature,
+                    max_tokens,
+                    api_time_interval,
+                    debug,
+                )
+            if verbose:
+                print("\n------------------GENERATED COT-------------------")
+                print(cot)
+
+            # TODO: if cot_trigger is none, then cot is already the model's answer.
+            # save the model output in this case somewhere else or not?
+            generated_cot["cot"] = cot
+            generated_cot["date"] = print_now(1)
+                
+            for answer_extraction_key in answer_extraction_keys:
+                if answer_extraction_key is None:
+                    pass
+
+                else:
+                    answer = {"answer-extraction": answer_extraction_key, "answer": "", "correct_answer": None}
+
+                    answer_extraction_prompt = (
+                        generate_cot_prompt
+                        + "\n"
+                        + cot
+                        + "\n"
+                        + TEMPLATES["answer-extractions"][answer_extraction_key]
+                    )
+
+                    if verbose:
+                        print("\n------------------ANSWER EXTRACTION-------------------")
+                        print(answer_extraction_prompt)
+
+                    # assert (
+                    #     _ == template_version
+                    # ), "Version mismatch cot trigger <-> answer extraction"
+
+                    if langchain:
+                        predicted_answer = query_model( 
+                            answer_extraction_prompt,
+                            engine,
+                            temperature,
+                            max_tokens,
+                            api_time_interval,
+                            debug,
+                        )
+                    else:
+                        predicted_answer = query_gpt3( 
+                            answer_extraction_prompt,
+                            engine,
+                            temperature,
+                            max_tokens,
+                            api_time_interval,
+                            debug,
+                        )
+                    if verbose:
+                        print("\n------------------EXTRACTED ANSWER-------------------")
+                        print(predicted_answer)
+
+                    answer["answer"] = predicted_answer
+                    generated_cot["answers"].append(answer)
             item["generated_cot"].append(generated_cot)
 
     return item
 
+# def get_cot_generation_prompt(item, instruction_key, cot_trigger_key):
+#     # Adding Letters (A,B,C,...) for the given multiple choice answers.
+#     choices = "\n".join(
+#         [f"{chr(65+i)}) {example}" for i, example in enumerate(item["choices"])]
+#     )
+#     prompt =''
+#     if instruction_key is not None:
+#         prompt.append(TEMPLATES["instructions"][instruction_key] + "\n\n")
+#     if cot_trigger_key is not None:
+#         prompt.append(
+#         item["question"]
+#         + "\n"
+#         + choices
+#         + "\n\n"
+#         + TEMPLATES["cot-triggers"][cot_trigger_key]
+#     )
+#     return TEMPLATES["version"], prompt
 
-def get_cot_generation_prompt(item, instruction_key, cot_trigger_key):
-    choices = "\n".join(
-        [f"{chr(65+i)}) {example}" for i, example in enumerate(item["choices"])]
-    )
-    if instruction_key is not None:
-        prompt = TEMPLATES["instructions"][instruction_key] + "\n\n"
-    prompt = (
-        item["question"]
-        + "\n"
-        + choices
-        + "\n\n"
-        + TEMPLATES["cot-triggers"][cot_trigger_key]
-    )
-    return TEMPLATES["version"], prompt
-
-
-def get_answer_extraction_prompt(item, generated_cot, answer_extraction_key):
-    choices = "\n".join(
-        [f"{chr(65+i)}) {example}" for i, example in enumerate(item["choices"])]
-    )
-    prompt = (
-        item["question"]
-        + "\n"
-        + choices
-        + "\n\n"
-        + generated_cot
-        + "\n"
-        + TEMPLATES["answer-extractions"][answer_extraction_key]
-    )
-    return TEMPLATES["version"], prompt
+# def get_answer_extraction_prompt(item, generated_cot, answer_extraction_key):
+#     # Adding Letters (A,B,C,...) for the given multiple choice answers.
+#     choices = "\n".join(
+#         [f"{chr(65+i)}) {example}" for i, example in enumerate(item["choices"])]
+#     )
+#     prompt = (
+#         item["question"]
+#         + "\n"
+#         + choices
+#         + "\n\n"
+#         + generated_cot
+#         + "\n"
+#         + TEMPLATES["answer-extractions"][answer_extraction_key]
+#     )
+#     return TEMPLATES["version"], prompt
 
 
 def query_gpt3(input, engine, temperature, max_tokens, api_time_interval, debug):
@@ -270,7 +347,7 @@ def query_gpt3(input, engine, temperature, max_tokens, api_time_interval, debug)
         # GPT-3 API allows each users execute the API within 60 times in a minute ...
         # time.sleep(1)
         time.sleep(api_time_interval)
-        response = openai.Completion.create(
+        response = oai.Completion.create(
             engine=engine,
             prompt=input,
             max_tokens=max_tokens,
@@ -278,3 +355,45 @@ def query_gpt3(input, engine, temperature, max_tokens, api_time_interval, debug)
             stop=None,
         )
         return response["choices"][0]["text"]
+
+# def get_langchain_generation_cot_prompt(item, instruction_key, cot_trigger_key):
+#     choices = "\n".join(
+#         [f"{chr(65+i)}) {example}" for i, example in enumerate(item["choices"])]
+#     )
+#     template = """
+#         {question}
+#         + "\n"
+#         {answer_choices}
+#         + "\n\n"
+#         {cot_trigger}
+#         """
+#     question = item['question']
+#     answer_choices = choices
+#     cot_trigger = TEMPLATES["cot-triggers"][cot_trigger_key]
+
+#     prompt = Prompt(template=template, input_variables=["question", "answer_choices", "cot_trigger"])
+
+#     return TEMPLATES["version"], prompt
+
+
+def query_model(input, engine, temperature, max_tokens, api_time_interval, debug):
+    from langchain import Prompt, OpenAI, LLMChain
+
+    if debug:
+        return "test"
+    else:
+        # make Prompt object with foo variable "empty" to be able to use langchain API
+        template = "{empty}" + input
+        time.sleep(api_time_interval)
+        prompt = Prompt(template=template, input_variables=["empty"])
+        llm_chain = LLMChain(
+            prompt = prompt,
+            llm=OpenAI(
+                model_name=engine,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+        )
+        # return function gives already back the selection of openai response["choices"][0]["text"]
+        response = llm_chain.predict(empty=None, stop=None)
+        return response
